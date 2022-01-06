@@ -93,6 +93,19 @@ let telegram={
   "type": "select",
   "proxies":["♻️ 自动选择","✅ 选择节点","🌏 全球直连","🛑 全球拦截"]
 }
+//youtube
+let youtube={
+  "name": "📺 Youtube",
+  "type": "select",
+  "proxies":["♻️ 自动选择","✅ 选择节点","🌏 全球直连","🛑 全球拦截"]
+}
+//微软
+let microsoft={
+  "name": "Ⓜ️ 微软服务",
+  "type": "select",
+  "proxies":["♻️ 自动选择","✅ 选择节点","🌏 全球直连","🛑 全球拦截"]
+}
+
 
 //其他没命中的
 let others={
@@ -103,7 +116,7 @@ let others={
 
 //内置代理规则
 let builtInProxyGroups=[
-  proxy,automatic,select,fallback,direct,prevent,all,privateNetwork,icloud,apple,google,telegram,others
+  proxy,automatic,select,fallback,direct,prevent,all,privateNetwork,icloud,apple,google,telegram,youtube,microsoft,others
 ]
 
 
