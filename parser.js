@@ -56,20 +56,42 @@ let all={
     "type": "select",
     "proxies":[]
 }
-
 //私有网络
 let privateNetwork={
   "name": "⛓️ 私有网络",
   "type": "select",
   "proxies":["♻️ 自动选择","✅ 选择节点","🌏 全球直连","🛑 全球拦截"]
 }
+//icloud
+let icloud={
+  "name": "☁️ Icloud",
+  "type": "select",
+  "proxies":["♻️ 自动选择","✅ 选择节点","🌏 全球直连","🛑 全球拦截"]
+}
+//apple
+let apple={
+  "name": "📱 Apple",
+  "type": "select",
+  "proxies":["♻️ 自动选择","✅ 选择节点","🌏 全球直连","🛑 全球拦截"]
+}
+//google
+let google={
+  "name": "📫 Google",
+  "type": "select",
+  "proxies":["♻️ 自动选择","✅ 选择节点","🌏 全球直连","🛑 全球拦截"]
+}
+
+//内置代理规则
+let builtInProxyGroups=[
+  automatic,select,fallback,direct,prevent,all,privateNetwork,icloud,apple,google
+]
 
 
 
 
 module.exports.parse = async function(raw, {axios, yaml, notify,console},{ name, url, interval, selected }) {
     //获取存储在github上的配置，如果想放在文件中也可以直接从url中复制出来
-    await getConfig(axios,console)
+    await getConfig(axios,console,notify)
 
     let content = yaml.parse(raw);
 
@@ -116,13 +138,7 @@ module.exports.parse = async function(raw, {axios, yaml, notify,console},{ name,
      *
      * {@link https://github.com/Loyalsoldier/clash-rules}
      */
-    content['proxy-groups'].splice(0,0,all);//阻止链接
-    content['proxy-groups'].splice(0,0,prevent);//阻止链接
-    content['proxy-groups'].splice(0,0,direct);//直连
-    content['proxy-groups'].splice(0,0,fallback);//故障
-    content['proxy-groups'].splice(0,0,select);//手动选择
-    content['proxy-groups'].splice(0,0,automatic);//自动选择
-
+    content['proxy-groups'] = builtInProxyGroups.concat(content['proxy-groups']);
     let returnStr = yaml.stringify(content)+rule_providers;
 
     console.log(returnStr)
@@ -130,29 +146,28 @@ module.exports.parse = async function(raw, {axios, yaml, notify,console},{ name,
   }
 
 
-  async function getConfig(axios,console){
-    console.log("获取配置")
+  async function getConfig(axios,console,notify){
 
     axios.defaults.headers.post['Content-Type'] = 'application/json;charset=UTF-8';
 
     await axios.get("https://raw.githubusercontent.com/fangweilong/clash-config/main/areas.json").then(function (response){
-      console.log("areas请求",response);
       areas=response.data;
     }).catch(function(error){
-        console.log(error);
+      notify("错误",error)
+      console.log(error);
     });
 
     await axios.get("https://raw.githubusercontent.com/fangweilong/clash-config/main/rule_providers.yml").then(function (response){
-      console.log("rule_providers请求",response);
       rule_providers=response.data;
     }).catch(function(error){
-        console.log(error);
+      notify("错误",error)
+      console.log(error);
     });
 
     await axios.get("https://raw.githubusercontent.com/fangweilong/clash-config/main/rules.json").then(function (response){
-      console.log("rules请求",response);
       rules=response.data;
     }).catch(function(error){
-        console.log(error);
+      notify("错误",error)
+      console.log(error);
     });
   }
