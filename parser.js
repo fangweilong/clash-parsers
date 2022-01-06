@@ -15,13 +15,19 @@ let rules=[]
 //切换时间 12小时
 let intervalTime = 43200
 
+//需要代理的
+let proxy={
+  "name": "🪜 代理",
+  "type": "select",
+  "proxies":["🌏 全球直连","🛑 全球拦截","♻️ 自动选择","✅ 选择节点"]
+}
+
 //自动选择
 let automatic={
     "name": "♻️ 自动选择",
     "type": "url-test",
     "url": "http://www.gstatic.com/generate_204",
     "interval": intervalTime,//更新周期
-    "tolerance": 500,//切换阈值
     "proxies":[]
 }
 //选择节点
@@ -60,7 +66,7 @@ let all={
 let privateNetwork={
   "name": "⛓️ 私有网络",
   "type": "select",
-  "proxies":["♻️ 自动选择","✅ 选择节点","🌏 全球直连","🛑 全球拦截"]
+  "proxies":["🌏 全球直连","🛑 全球拦截","♻️ 自动选择","✅ 选择节点"]
 }
 //icloud
 let icloud={
@@ -81,9 +87,23 @@ let google={
   "proxies":["♻️ 自动选择","✅ 选择节点","🌏 全球直连","🛑 全球拦截"]
 }
 
+//telegram
+let telegram={
+  "name": "📲 Telegram",
+  "type": "select",
+  "proxies":["♻️ 自动选择","✅ 选择节点","🌏 全球直连","🛑 全球拦截"]
+}
+
+//其他没命中的
+let others={
+  "name": "🐟 未命中规则",
+  "type": "select",
+  "proxies":["🌏 全球直连","🛑 全球拦截","♻️ 自动选择","✅ 选择节点"]
+}
+
 //内置代理规则
 let builtInProxyGroups=[
-  automatic,select,fallback,direct,prevent,all,privateNetwork,icloud,apple,google
+  proxy,automatic,select,fallback,direct,prevent,all,privateNetwork,icloud,apple,google,telegram,others
 ]
 
 
