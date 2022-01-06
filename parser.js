@@ -105,8 +105,6 @@ let microsoft={
   "type": "select",
   "proxies":["♻️ 自动选择","✅ 选择节点","🌏 全球直连","🛑 全球拦截"]
 }
-
-
 //其他没命中的
 let others={
   "name": "🐟 未命中规则",
