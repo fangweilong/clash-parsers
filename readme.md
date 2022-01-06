@@ -2,6 +2,8 @@
 
 *我使用的是汉化的，但是位置一样*
 
+**分流规则使用[clash-rules](https://github.com/Loyalsoldier/clash-rules)**
+
 ## 1.编辑配置
 
 ### 设置-预处理配置
