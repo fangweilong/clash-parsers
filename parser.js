@@ -181,24 +181,24 @@ module.exports.parse = async function(raw, {axios, yaml, notify,console},{ name,
 
     axios.defaults.headers.post['Content-Type'] = 'application/json;charset=UTF-8';
 
-    await axios.get("https://raw.githubusercontent.com/fangweilong/clash-parsers/main/areas.json").then(function (response){
+    await axios.get("https://cdn.jsdelivr.net/gh/fangweilong/clash-parsers/areas.json").then(function (response){
       areas=response.data;
     }).catch(function(error){
       notify("错误",error)
-      console.log(error);
+      console.log("areas错误",error);
     });
 
-    await axios.get("https://raw.githubusercontent.com/fangweilong/clash-parsers/main/rule_providers.yml").then(function (response){
+    await axios.get("https://cdn.jsdelivr.net/gh/fangweilong/clash-parsers/rule_providers.yml").then(function (response){
       rule_providers=response.data;
     }).catch(function(error){
       notify("错误",error)
-      console.log(error);
+      console.log("rule_providers错误",error);
     });
 
-    await axios.get("https://raw.githubusercontent.com/fangweilong/clash-parsers/main/rules.json").then(function (response){
+    await axios.get("https://cdn.jsdelivr.net/gh/fangweilong/clash-parsers/rules.json").then(function (response){
       rules=response.data;
     }).catch(function(error){
       notify("错误",error)
-      console.log(error);
+      console.log("rules错误",error);
     });
   }
