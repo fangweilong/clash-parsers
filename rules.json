@@ -45,8 +45,6 @@
     "PROCESS-NAME,WebTorrent.exe,DIRECT",
     "DOMAIN,clash.razord.top,DIRECT",
     "DOMAIN,yacd.haishan.me,DIRECT",
-    "GEOIP,,DIRECT",
-    "GEOIP,CN,DIRECT",
     "PROCESS-NAME,OneDrive,Ⓜ️ 微软服务",
     "PROCESS-NAME,OneDriveUpdater,Ⓜ️ 微软服务",
     "DOMAIN-KEYWORD,1drv,Ⓜ️ 微软服务",
@@ -144,6 +142,7 @@
     "DOMAIN-SUFFIX,googlevideo.com,📺 Youtube",
     "DOMAIN,youtubei.googleapis.com,📺 Youtube",
     "DOMAIN-KEYWORD,youtube,📺 Youtube",
+    "RULE-SET,defaultNetworkCard,指定网卡",
     "RULE-SET,lancidr,DIRECT",
     "RULE-SET,cncidr,DIRECT",
     "RULE-SET,private,⛓️ 私有网络",
@@ -155,6 +154,7 @@
     "RULE-SET,telegramcidr,📲 Telegram",
     "RULE-SET,gfw,🪜 代理",
     "RULE-SET,proxy,🪜 代理",
-    "RULE-SET,defaultNetworkCard,指定网卡",
+    "GEOIP,,DIRECT",
+    "GEOIP,CN,DIRECT",
     "MATCH,🐟 未命中规则"
 ]
