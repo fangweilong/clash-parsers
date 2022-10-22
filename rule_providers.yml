@@ -80,6 +80,6 @@ rule-providers:
     defaultNetworkCard:
       type: http
       behavior: domain
-      url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/defaultNetworkCard.txt
+      url: https://raw.githubusercontent.com/fangweilong/clash-parsers/main/defaultNetworkCard.txt
       path: ./ruleset/defaultNetworkCard.yaml
       interval: 86400
