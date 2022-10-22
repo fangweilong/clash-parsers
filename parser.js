@@ -112,9 +112,17 @@ let others={
   "proxies":["🌏 全球直连","🛑 全球拦截","♻️ 自动选择","✅ 选择节点"]
 }
 
+//指定网卡
+let defaultNetworkCard={
+  "name": "指定网卡",
+  "type": "select",
+  "interface-name": "凌脉VPN",
+  "proxies":["DIRECT"]
+}
+
 //内置代理规则
 let builtInProxyGroups=[
-  proxy,automatic,select,fallback,direct,prevent,all,privateNetwork,icloud,apple,google,telegram,youtube,microsoft,others
+  proxy,automatic,select,fallback,direct,prevent,all,privateNetwork,icloud,apple,google,telegram,youtube,microsoft,others,defaultNetworkCard
 ]
 
 

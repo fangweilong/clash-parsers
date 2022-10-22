@@ -77,3 +77,9 @@ rule-providers:
       url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/lancidr.txt
       path: ./ruleset/lancidr.yaml
       interval: 86400
+    defaultNetworkCard:
+      type: http
+      behavior: domain
+      url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/defaultNetworkCard.txt
+      path: ./ruleset/defaultNetworkCard.yaml
+      interval: 86400

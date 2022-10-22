@@ -155,5 +155,6 @@
     "RULE-SET,telegramcidr,📲 Telegram",
     "RULE-SET,gfw,🪜 代理",
     "RULE-SET,proxy,🪜 代理",
+    "RULE-SET,defaultNetworkCard,defaultNetworkCard",
     "MATCH,🐟 未命中规则"
 ]
