@@ -155,6 +155,5 @@
     "RULE-SET,gfw,🪜 代理",
     "RULE-SET,proxy,🪜 代理",
     "RULE-SET,defaultNetworkCard,指定网卡",
-    "DOMAIN-SUFFIX,links-e.com,指定网卡",
     "MATCH,🐟 未命中规则"
 ]
