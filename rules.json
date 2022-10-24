@@ -45,7 +45,6 @@
     "PROCESS-NAME,WebTorrent.exe,DIRECT",
     "DOMAIN,clash.razord.top,DIRECT",
     "DOMAIN,yacd.haishan.me,DIRECT",
-    "GEOIP,,DIRECT",
     "GEOIP,CN,DIRECT",
     "PROCESS-NAME,OneDrive,Ⓜ️ 微软服务",
     "PROCESS-NAME,OneDriveUpdater,Ⓜ️ 微软服务",

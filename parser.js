@@ -116,7 +116,7 @@ let others={
 let defaultNetworkCard={
   "name": "指定网卡",
   "type": "select",
-  "interface-name": "凌脉VPN",
+  "interface-name": "VPN",
   "proxies":["DIRECT"]
 }
 
@@ -188,6 +188,7 @@ module.exports.parse = async function(raw, {axios, yaml, notify,console},{ name,
   async function getConfig(axios,console,notify){
 
     axios.defaults.headers.post['Content-Type'] = 'application/json;charset=UTF-8';
+    axios.defaults.headers.post['Cache-Control'] = 'no-cache';
 
     await axios.get("https://cdn.jsdelivr.net/gh/fangweilong/clash-parsers/areas.json").then(function (response){
       areas=response.data;
@@ -196,14 +197,14 @@ module.exports.parse = async function(raw, {axios, yaml, notify,console},{ name,
       console.log("areas错误",error);
     });
 
-    await axios.get("https://cdn.jsdelivr.net/gh/fangweilong/clash-parsers/rule_providers.yml").then(function (response){
+    await axios.get("https://raw.githubusercontent.com/fangweilong/clash-parsers/main/rule_providers.yml").then(function (response){
       rule_providers=response.data;
     }).catch(function(error){
       notify("错误",error)
       console.log("rule_providers错误",error);
     });
 
-    await axios.get("https://cdn.jsdelivr.net/gh/fangweilong/clash-parsers/rules.json").then(function (response){
+    await axios.get("https://raw.githubusercontent.com/fangweilong/clash-parsers/main/rules.json").then(function (response){
       rules=response.data;
     }).catch(function(error){
       notify("错误",error)
