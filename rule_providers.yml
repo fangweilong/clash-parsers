@@ -80,12 +80,6 @@ rule-providers:
     defaultNetworkCard:
       type: http
       behavior: domain
-      url: https://raw.githubusercontent.com/fangweilong/clash-parsers/main/defaultNetworkCardByR.txt
-      path: ./ruleset/defaultNetworkCard.yaml
-      interval: 86400
-    defaultNetworkCard:
-      type: http
-      behavior: domain
-      url: https://raw.githubusercontent.com/fangweilong/clash-parsers/main/defaultNetworkCardBy.txt
+      url: https://raw.githubusercontent.com/fangweilong/clash-parsers/main/defaultNetworkCard.txt
       path: ./ruleset/defaultNetworkCard.yaml
       interval: 86400
