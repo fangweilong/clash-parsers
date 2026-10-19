@@ -45,3 +45,12 @@ file:parser.js的路径，替换成自己电脑的即可
 ### 文档
 
 [文档地址](https://www.clashverge.dev/guide/extend.html)
+
+## FlClash
+
+### 1. 添加覆写脚本
+
+1. 打开 FlClash，进入「配置 (Profiles)」。
+2. 点击对应的订阅配置项，选择「覆写 (Override)」或「脚本 (Script)」。
+3. 将 [`flclash/override.js`](./flclash/override.js) 代码复制并保存。
+4. 重新加载/更新订阅即可生效。
