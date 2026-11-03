@@ -13,8 +13,13 @@
  *      不参与自动测速与故障转移，避免测速污染；
  *   3. 真实节点按地区归类聚集并连续编号（如 `🇭🇰 香港 01`、`🇯🇵 日本 01`），无冗余协议后缀；
  *   4. 重建分组：入口 / 自动 / 故障转移 / 直连 / 地区（自动+手动）/ 服务 / 广告拦截；
+ *      分组规模由 GROUP_LAYOUT 控制（默认 compact：合并同类服务、去掉重复地区手动组与故障转移/拒绝组），
+ *      每个分组附带 icon（FlClash 列表视图显示）；
  *      原本英文的 DIRECT 与 REJECT 统一映射为中文「直连」与「拒绝」策略组，界面告别冷冰冰的英文；
  *   5. 重建规则：按服务分组 + 广告拦截 + 国内直连，命中顺序显式且无重复；
+ *      Tailscale 支持两种接入方式（脚本顶部 TAILSCALE_MODE）：
+ *      `direct` 本机已装官方客户端，网段与 ts.net 强制直连、MagicDNS 走 100.100.100.100；
+ *      `outbound` 未装官方客户端（Android），注入 type: tailscale 出站节点，仅能主动访问 tailnet；
  *   6. 重建 DNS：默认国内 DoH，境外域名按服务走对应出口解析，
  *      避免原订阅「nameserver 指向代理组」造成的启动死锁；
  *   7. 订阅只有 proxy-providers（没有内联 proxies）时同样可用：
@@ -44,6 +49,32 @@ const GROUP = {
 
 const OVERSEAS_DNS_GROUP = GROUP.auto; // 境外域名默认由该组出口解析
 
+// 分组图标：FlClash 的列表视图读取 mihomo 的 group.icon（URL）。
+// 换成自建图床时只改 ICON_BASE；地区图标由 REGIONS[].icon 指定文件名。
+const ICON_BASE = 'https://cdn.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color';
+const ICON = {
+  entry: `${ICON_BASE}/Proxy.png`,
+  auto: `${ICON_BASE}/Auto.png`,
+  fallback: `${ICON_BASE}/Round_Robin.png`,
+  direct: `${ICON_BASE}/Direct.png`,
+  reject: `${ICON_BASE}/Reject.png`,
+  adblock: `${ICON_BASE}/Advertising.png`,
+  tailscale: `${ICON_BASE}/Server.png`,
+  ai: `${ICON_BASE}/AI.png`,
+  copilot: `${ICON_BASE}/Copilot.png`,
+  youtube: `${ICON_BASE}/YouTube.png`,
+  google: `${ICON_BASE}/Google.png`,
+  telegram: `${ICON_BASE}/Telegram.png`,
+  social: `${ICON_BASE}/Telegram.png`,
+  media: `${ICON_BASE}/Media.png`,
+  streaming: `${ICON_BASE}/Streaming.png`,
+  system: `${ICON_BASE}/Microsoft.png`,
+  apple: `${ICON_BASE}/Apple.png`,
+  developer: `${ICON_BASE}/GitHub.png`,
+};
+
+const iconUrl = (name) => `${ICON_BASE}/${name}.png`;
+
 // ─────────────────────────── 节点识别 ───────────────────────────
 
 // 官网、链接、推广等纯广告节点：彻底剔除
@@ -59,23 +90,25 @@ const NOTICE_PATTERN =
   '剩余流量|套餐到期|已用流量|到期时间|重置|官网|订阅|客服|群组|公告|邀请|机场|倍率|https?://';
 
 const REGIONS = [
-  { key: 'HK', name: '香港', flag: '🇭🇰', re: /(^|[-_ ])(HK|HKG|Hong Kong)([-_ ]|$)|香港|深港|沪港|京港/i },
-  { key: 'TW', name: '台湾', flag: '🇹🇼', re: /(^|[-_ ])(TW|TWN|Taiwan)([-_ ]|$)|台湾|台北|新北|彰化/i },
-  { key: 'JP', name: '日本', flag: '🇯🇵', re: /(^|[-_ ])(JP|JPN|JPSB|Japan)([-_ ]|$)|日本|东京|大阪|埼玉/i },
-  { key: 'SG', name: '新加坡', flag: '🇸🇬', re: /(^|[-_ ])(SG|SGP|Singapore)([-_ ]|$)|新加坡|狮城/i },
-  { key: 'US', name: '美国', flag: '🇺🇸', re: /(^|[-_ ])(US|USA|United States)([-_ ]|$)|美国|洛杉矶|硅谷|圣何塞|西雅图|芝加哥|达拉斯|纽约/i },
-  { key: 'KR', name: '韩国', flag: '🇰🇷', re: /(^|[-_ ])(KR|KOR|Korea)([-_ ]|$)|韩国|首尔|春川/i },
-  { key: 'GB', name: '英国', flag: '🇬🇧', re: /(^|[-_ ])(UK|GBR|Britain)([-_ ]|$)|英国|伦敦/i },
-  { key: 'DE', name: '德国', flag: '🇩🇪', re: /(^|[-_ ])(DE|GER|Germany)([-_ ]|$)|德国|法兰克福/i },
-  { key: 'FR', name: '法国', flag: '🇫🇷', re: /(^|[-_ ])(FR|FRA|France)([-_ ]|$)|法国|巴黎/i },
-  { key: 'NL', name: '荷兰', flag: '🇳🇱', re: /(^|[-_ ])(NL|NLD|Netherlands)([-_ ]|$)|荷兰|阿姆斯特丹/i },
-  { key: 'CA', name: '加拿大', flag: '🇨🇦', re: /(^|[-_ ])(CA|CAN|Canada)([-_ ]|$)|加拿大|多伦多|温哥华|蒙特利尔/i },
-  { key: 'AU', name: '澳大利亚', flag: '🇦🇺', re: /(^|[-_ ])(AU|AUS|Australia)([-_ ]|$)|澳大利亚|澳洲|悉尼|墨尔本/i },
+  { key: 'HK', name: '香港', flag: '🇭🇰', icon: 'HK', re: /(^|[-_ ])(HK|HKG|Hong Kong)([-_ ]|$)|香港|深港|沪港|京港/i },
+  { key: 'TW', name: '台湾', flag: '🇹🇼', icon: 'TW', re: /(^|[-_ ])(TW|TWN|Taiwan)([-_ ]|$)|台湾|台北|新北|彰化/i },
+  { key: 'JP', name: '日本', flag: '🇯🇵', icon: 'JP', re: /(^|[-_ ])(JP|JPN|JPSB|Japan)([-_ ]|$)|日本|东京|大阪|埼玉/i },
+  { key: 'SG', name: '新加坡', flag: '🇸🇬', icon: 'SG', re: /(^|[-_ ])(SG|SGP|Singapore)([-_ ]|$)|新加坡|狮城/i },
+  { key: 'US', name: '美国', flag: '🇺🇸', icon: 'US', re: /(^|[-_ ])(US|USA|United States)([-_ ]|$)|美国|洛杉矶|硅谷|圣何塞|西雅图|芝加哥|达拉斯|纽约/i },
+  { key: 'KR', name: '韩国', flag: '🇰🇷', icon: 'KR', re: /(^|[-_ ])(KR|KOR|Korea)([-_ ]|$)|韩国|首尔|春川/i },
+  { key: 'GB', name: '英国', flag: '🇬🇧', icon: 'UK', re: /(^|[-_ ])(UK|GBR|Britain)([-_ ]|$)|英国|伦敦/i },
+  { key: 'DE', name: '德国', flag: '🇩🇪', icon: 'DE', re: /(^|[-_ ])(DE|GER|Germany)([-_ ]|$)|德国|法兰克福/i },
+  { key: 'FR', name: '法国', flag: '🇫🇷', icon: 'FR', re: /(^|[-_ ])(FR|FRA|France)([-_ ]|$)|法国|巴黎/i },
+  { key: 'NL', name: '荷兰', flag: '🇳🇱', icon: 'Area', re: /(^|[-_ ])(NL|NLD|Netherlands)([-_ ]|$)|荷兰|阿姆斯特丹/i },
+  { key: 'CA', name: '加拿大', flag: '🇨🇦', icon: 'CA', re: /(^|[-_ ])(CA|CAN|Canada)([-_ ]|$)|加拿大|多伦多|温哥华|蒙特利尔/i },
+  { key: 'AU', name: '澳大利亚', flag: '🇦🇺', icon: 'AU', re: /(^|[-_ ])(AU|AUS|Australia)([-_ ]|$)|澳大利亚|澳洲|悉尼|墨尔本/i },
 ];
 
-const OTHER_REGION = { key: 'XX', name: '其他', flag: '🏳️' };
+const OTHER_REGION = { key: 'XX', name: '其他', flag: '🏳️', icon: 'Area' };
 
 // ─────────────────────────── 规则数据 ───────────────────────────
+
+const OPENCODE_RULES = ['DOMAIN-SUFFIX,opencode.ai', 'DOMAIN-KEYWORD,opencode'];
 
 const CLAUDE_RULES = [
   'DOMAIN,http-intake.logs.us5.datadoghq.com',
@@ -260,6 +293,44 @@ const DEV_RULES = [
   'DOMAIN-SUFFIX,jquery.com',
 ];
 
+// ─────────────────────────── 分组规模 ───────────────────────────
+// 'compact' 精简（默认）：同类服务合并成一组，去掉重复的地区手动组与故障转移 / 拒绝组
+// 'full'    完整：每个服务独立成组，保留地区手动组、故障转移与拒绝组
+const GROUP_LAYOUT = 'compact';
+
+// ─────────────────────────── Tailscale 接入方式 ───────────────────────────
+// 'direct'   本机已装官方 Tailscale（Windows / 桌面）。tailnet 流量强制直连，
+//            MagicDNS 交给 100.100.100.100，其他设备可反向连入本机。
+// 'outbound' 本机未装官方 Tailscale（Android 单 VPN 槽位）。由 FlClash 内置 tsnet
+//            出站接入 tailnet，仅出站：本机能访问 tailnet 设备，其他设备无法连入本机。
+//            需要 mihomo ≥ v1.19.25（FlClash ≥ 0.8.93），低版本会因未知节点类型拒绝加载。
+const TAILSCALE_MODE = 'direct';
+
+// 'outbound' 模式的节点参数（'direct' 模式下不生效）
+const TAILSCALE_NODE = {
+  name: '🏠 Tailscale',
+  group: 'Tailscale',
+  hostname: 'flclash-android',
+  authKey: '', // 留空则首次命中时在 FlClash 日志里打开登录链接完成授权
+  controlUrl: 'https://controlplane.tailscale.com',
+  stateDir: './tailscale',
+};
+
+// 网段、MagicDNS、控制面/DERP 域名。这些流量一旦被送进机场代理，
+// tailnet 内其他设备就无法连入本机，MagicDNS 名称也会被解析成 fake-ip。
+const TAILSCALE_RULES = [
+  'DOMAIN-SUFFIX,ts.net', // MagicDNS 域名后缀
+  'DOMAIN-SUFFIX,tailscale.com', // 登录、控制面、DERP 中继
+  'DOMAIN-SUFFIX,tailscale.io',
+  'IP-CIDR,100.64.0.0/10,no-resolve', // CGNAT 段：节点地址与 MagicDNS 解析器 100.100.100.100
+  'IP-CIDR6,fd7a:115c:a1e0::/48,no-resolve', // Tailscale IPv6 段
+];
+
+// MagicDNS 解析器：tailscaled 在本机监听的固定地址，直接查询可避开 system 解析被 TUN 再次劫持
+const TAILSCALE_DNS = '100.100.100.100';
+
+const isTailscaleOutbound = () => TAILSCALE_MODE === 'outbound';
+
 const DIRECT_RULES = [
   'DOMAIN-SUFFIX,lan',
   'DOMAIN-SUFFIX,local',
@@ -272,7 +343,6 @@ const DIRECT_RULES = [
   'DOMAIN-SUFFIX,googletagmanager.com',
   'DOMAIN,cn.bing.com',
   'IP-CIDR,10.0.0.0/8,no-resolve',
-  'IP-CIDR,100.64.0.0/10,no-resolve',
   'IP-CIDR,127.0.0.0/8,no-resolve',
   'IP-CIDR,169.254.0.0/16,no-resolve',
   'IP-CIDR,172.16.0.0/12,no-resolve',
@@ -301,6 +371,8 @@ const FAKE_IP_FILTER = [
   '+.msftconnecttest.com',
   '+.lan',
   '+.local',
+  '+.tailscale.com',
+  '+.tailscale.io',
 ];
 
 const RULE_PROVIDERS = {
@@ -330,33 +402,58 @@ const RULE_PROVIDERS = {
 //   directFirst   直连优先（国内可用服务），DNS 不切境外
 //   allowDirect   组内末尾附带 DIRECT 作为兜底
 //   dnsVia        'self' 用本服务组解析 DNS，缺省走 OVERSEAS_DNS_GROUP
+//   icon          分组图标 URL（FlClash 列表视图显示）
 //   pin           分组置顶（紧跟入口组），便于在界面上一眼看到
 const SERVICES = [
-  {
-    name: '🤖 OpenCode',
-    pin: true,
-    rules: ['DOMAIN-SUFFIX,opencode.ai', 'DOMAIN-KEYWORD,opencode'],
-    preferRegions: ['JP', 'US'],
-    allowDirect: true,
-    dnsVia: 'self',
-  },
   {
     name: 'Claude',
     rules: CLAUDE_RULES,
     preferRegions: ['JP', 'US'],
     dnsVia: 'self',
+    icon: ICON.ai,
   },
-  { name: 'AI', rules: AI_RULES, dnsVia: 'self' },
-  { name: 'Copilot', rules: COPILOT_RULES, allowDirect: true, dnsVia: 'self' },
-  { name: 'YouTube', rules: YOUTUBE_RULES, allowDirect: true },
-  { name: 'Google', rules: GOOGLE_RULES, allowDirect: true },
-  { name: 'Telegram', rules: TELEGRAM_RULES, allowDirect: true },
-  { name: '社交', rules: SOCIAL_RULES, allowDirect: true },
-  { name: '流媒体', rules: MEDIA_RULES, allowDirect: true },
-  { name: '微软', rules: MICROSOFT_RULES, directFirst: true },
-  { name: '苹果', rules: APPLE_RULES, directFirst: true },
-  { name: '开发者', rules: DEV_RULES, allowDirect: true },
+  { name: 'AI', rules: [...OPENCODE_RULES, ...AI_RULES], dnsVia: 'self', icon: ICON.ai },
+  {
+    name: 'Copilot',
+    rules: COPILOT_RULES,
+    allowDirect: true,
+    dnsVia: 'self',
+    icon: ICON.copilot,
+  },
+  { name: 'YouTube', rules: YOUTUBE_RULES, allowDirect: true, icon: ICON.youtube },
+  { name: 'Google', rules: GOOGLE_RULES, allowDirect: true, icon: ICON.google },
+  { name: 'Telegram', rules: TELEGRAM_RULES, allowDirect: true, icon: ICON.telegram },
+  { name: '社交', rules: SOCIAL_RULES, allowDirect: true, icon: ICON.social },
+  { name: '流媒体', rules: MEDIA_RULES, allowDirect: true, icon: ICON.streaming },
+  { name: '微软', rules: MICROSOFT_RULES, directFirst: true, icon: ICON.system },
+  { name: '苹果', rules: APPLE_RULES, directFirst: true, icon: ICON.apple },
+  { name: '开发者', rules: DEV_RULES, allowDirect: true, icon: ICON.developer },
 ];
+
+// 精简布局：同类服务合并，AI 已包含 OpenCode
+const COMPACT_SERVICES = [
+  {
+    name: 'AI',
+    rules: [...OPENCODE_RULES, ...CLAUDE_RULES, ...AI_RULES, ...COPILOT_RULES],
+    preferRegions: ['JP', 'US'],
+    allowDirect: true,
+    dnsVia: 'self',
+    pin: true,
+    icon: ICON.ai,
+  },
+  {
+    name: '媒体',
+    rules: [...YOUTUBE_RULES, ...GOOGLE_RULES, ...MEDIA_RULES],
+    allowDirect: true,
+    icon: ICON.media,
+  },
+  { name: '社交', rules: [...TELEGRAM_RULES, ...SOCIAL_RULES], allowDirect: true, icon: ICON.social },
+  { name: '系统', rules: [...MICROSOFT_RULES, ...APPLE_RULES], directFirst: true, icon: ICON.system },
+  { name: '开发者', rules: DEV_RULES, allowDirect: true, icon: ICON.developer },
+];
+
+const isCompact = () => GROUP_LAYOUT === 'compact';
+const activeServices = () => (isCompact() ? COMPACT_SERVICES : SERVICES);
 
 // ─────────────────────────── 工具函数 ───────────────────────────
 
@@ -408,6 +505,13 @@ function extractExpire(raw) {
 
 function uniq(items) {
   return [...new Set(items)];
+}
+
+// mihomo 要求节点名唯一：与订阅节点撞名时追加序号
+function uniqueName(base, taken) {
+  let name = base;
+  for (let i = 2; taken.has(name); i += 1) name = `${base} ${i}`;
+  return name;
 }
 
 // ─────────────────────────── 节点整理 ───────────────────────────
@@ -503,6 +607,7 @@ function buildGroups(ctx) {
   const { nodeNames, providerKeys, regionMembers, infoNodeName } = ctx;
   // 订阅只给 provider 时无法枚举节点，地区维度直接跳过
   const enumrable = nodeNames.length > 0;
+  const compact = isCompact();
 
   const regionAuto = [];
   const regionManual = [];
@@ -514,12 +619,23 @@ function buildGroups(ctx) {
       if (!members || members.length === 0) continue;
       const autoName = `${region.name}-自动`;
       regionAutoByKey.set(region.key, autoName);
-      regionAuto.push(testGroup(autoName, members, 'url-test', { tolerance: TOLERANCE }));
-      regionManual.push(listGroup(region.name, uniq([autoName, ...members])));
+      regionAuto.push(
+        testGroup(autoName, members, 'url-test', {
+          tolerance: TOLERANCE,
+          icon: iconUrl(region.icon),
+        }),
+      );
+      // 地区手动组与自动组内容重复，精简布局只留自动组
+      if (!compact) {
+        regionManual.push(
+          listGroup(region.name, uniq([autoName, ...members]), { icon: iconUrl(region.icon) }),
+        );
+      }
     }
   }
 
   const regionNames = regionManual.map((group) => group.name);
+  const regionAutoNames = regionAuto.map((group) => group.name);
 
   // 节点出口组：内联节点直接列名字；有 provider 时用 use 引用，
   // 并用与 JS 过滤一致的正则排除 provider 里的伪节点。
@@ -532,23 +648,30 @@ function buildGroups(ctx) {
     return group;
   };
 
-  const autoGroup = nodeGroup(GROUP.auto, nodeNames, 'url-test', { tolerance: TOLERANCE });
-  const fallbackGroup = nodeGroup(GROUP.fallback, nodeNames, 'fallback');
+  const autoGroup = nodeGroup(GROUP.auto, nodeNames, 'url-test', {
+    tolerance: TOLERANCE,
+    icon: ICON.auto,
+  });
+  // 精简布局不建故障转移与拒绝组：自动选择已覆盖测速择优，广告拦截直接指向 REJECT
+  const fallbackGroup = compact
+    ? null
+    : nodeGroup(GROUP.fallback, nodeNames, 'fallback', { icon: ICON.fallback });
 
   // 中文直连组与拒绝组：封装底层 DIRECT 与 REJECT，界面全部中文展现
-  const directGroup = listGroup(GROUP.direct, ['DIRECT']);
-  const rejectGroup = listGroup(GROUP.reject, ['REJECT']);
+  const directGroup = listGroup(GROUP.direct, ['DIRECT'], { icon: ICON.direct });
+  const rejectGroup = compact ? null : listGroup(GROUP.reject, ['REJECT'], { icon: ICON.reject });
 
   const entryGroup = listGroup(
     GROUP.entry,
     uniq([
       GROUP.auto,
       ...(infoNodeName ? [infoNodeName] : []),
-      GROUP.fallback,
+      ...(fallbackGroup ? [GROUP.fallback] : []),
       GROUP.direct,
-      ...regionNames,
+      ...(compact ? regionAutoNames : regionNames),
       ...nodeNames,
     ]),
+    { icon: ICON.entry },
   );
   if (providerKeys.length > 0) {
     entryGroup.use = providerKeys;
@@ -565,18 +688,23 @@ function buildGroups(ctx) {
       ...(service.directFirst ? [GROUP.direct] : []),
       ...preferred,
       GROUP.auto,
-      GROUP.fallback,
-      ...regionNames,
+      ...(fallbackGroup ? [GROUP.fallback] : []),
+      ...(compact ? regionAutoNames : regionNames),
       ...nodeNames,
       ...(service.allowDirect || service.directFirst ? [GROUP.direct] : []),
     ]);
-    return listGroup(service.name, proxies);
+    return listGroup(service.name, proxies, { icon: service.icon });
   };
 
-  const serviceGroups = SERVICES.map(serviceGroup);
-  const pinned = SERVICES.map((service, index) => (service.pin ? index : -1)).filter((i) => i >= 0);
+  const services = activeServices();
+  const serviceGroups = services.map(serviceGroup);
+  const pinned = services.map((service, index) => (service.pin ? index : -1)).filter((i) => i >= 0);
 
-  const adblockGroup = listGroup(GROUP.adblock, [GROUP.reject, GROUP.direct]);
+  const adblockGroup = listGroup(
+    GROUP.adblock,
+    compact ? ['REJECT', GROUP.direct] : [GROUP.reject, GROUP.direct],
+    { icon: ICON.adblock },
+  );
 
   const groups = [
     entryGroup,
@@ -588,7 +716,7 @@ function buildGroups(ctx) {
     ...serviceGroups.filter((_, index) => !pinned.includes(index)),
     adblockGroup,
     rejectGroup,
-  ];
+  ].filter(Boolean);
 
   // 置顶服务组紧跟入口组，其余服务组收尾
   if (pinned.length > 0) {
@@ -601,10 +729,12 @@ function buildGroups(ctx) {
 // ─────────────────────────── 规则构建 ───────────────────────────
 
 function buildRules() {
+  const tailscaleTarget = isTailscaleOutbound() ? TAILSCALE_NODE.group : GROUP.direct;
   const lines = [
+    ...TAILSCALE_RULES.map((rule) => withTarget(rule, tailscaleTarget)),
     ...DIRECT_RULES.map((rule) => withTarget(rule, GROUP.direct)),
     `RULE-SET,AdBlock,${GROUP.adblock}`,
-    ...SERVICES.flatMap((service) =>
+    ...activeServices().flatMap((service) =>
       (service.rules ?? []).map((rule) => withTarget(rule, service.name)),
     ),
     `RULE-SET,China,${GROUP.direct}`,
@@ -622,7 +752,7 @@ function buildRules() {
 function buildDns(validNames) {
   const policy = { '+.cn': CN_DNS, '+.lan': 'system', '+.local': 'system' };
 
-  for (const service of SERVICES) {
+  for (const service of activeServices()) {
     // 直连优先的服务不该把 DNS 交给代理组解析
     if (service.directFirst) continue;
 
@@ -640,13 +770,19 @@ function buildDns(validNames) {
     }
   }
 
+  // 'outbound' 模式依赖 fake-ip 把域名交给 tsnet 的 MagicDNS，不能把 ts.net 排除出 fake-ip
+  const fakeIpFilter = isTailscaleOutbound() ? FAKE_IP_FILTER : [...FAKE_IP_FILTER, '+.ts.net'];
+
+  // MagicDNS 名称只认 Tailscale 本地解析器，避免走代理组 DoH 或被 fake-ip 接管
+  if (!isTailscaleOutbound()) policy['+.ts.net'] = [TAILSCALE_DNS];
+
   return {
     enable: true,
     ipv6: false,
     'enhanced-mode': 'fake-ip',
     'fake-ip-range': '198.18.0.1/16',
     'fake-ip-filter-mode': 'blacklist',
-    'fake-ip-filter': FAKE_IP_FILTER,
+    'fake-ip-filter': fakeIpFilter,
     'use-hosts': true,
     'respect-rules': false,
     'default-nameserver': ['223.5.5.5', '119.29.29.29'],
@@ -678,9 +814,41 @@ function main(config) {
   // 真实可用节点（排除仅用于展示的状态节点，避免测速污染与故障转移误切）
   const nodeNames = proxies.filter((p) => p !== infoNode).map((proxy) => proxy.name);
 
+  // Tailscale 内置出站节点：仅 outbound 模式注入，不进入自动选择、故障转移与入口组
+  let tailscaleNodeName = null;
+  if (isTailscaleOutbound()) {
+    // 同时避开订阅里的原始名：重命名表会把同名引用改写到订阅节点上
+    const taken = new Set([
+      ...proxies.map((proxy) => proxy.name),
+      ...rawProxies.map((proxy) => proxy?.name).filter(Boolean),
+    ]);
+    tailscaleNodeName = uniqueName(TAILSCALE_NODE.name, taken);
+    proxies.push({
+      name: tailscaleNodeName,
+      type: 'tailscale',
+      hostname: TAILSCALE_NODE.hostname,
+      'control-url': TAILSCALE_NODE.controlUrl,
+      'state-dir': TAILSCALE_NODE.stateDir,
+      ephemeral: false,
+      udp: true,
+      'accept-routes': true,
+      'ip-version': 'ipv4-prefer',
+      ...(TAILSCALE_NODE.authKey ? { 'auth-key': TAILSCALE_NODE.authKey } : {}),
+    });
+  }
+
   // 2~5. 分组
   const ctx = { nodeNames, providerKeys, regionMembers, infoNodeName: infoNode?.name };
   const { groups } = buildGroups(ctx);
+
+  // Tailscale 策略组紧跟入口组：默认走内置节点，可手动切回直连逃生
+  if (tailscaleNodeName) {
+    groups.splice(
+      1,
+      0,
+      listGroup(TAILSCALE_NODE.group, [tailscaleNodeName, GROUP.direct], { icon: ICON.tailscale }),
+    );
+  }
 
   // 6. 规则
   const rules = buildRules();
@@ -731,7 +899,7 @@ function main(config) {
 
   console.log(
     `保留 ${nodeNames.length} 个节点${providerKeys.length ? `、引用 ${providerKeys.length} 个 provider` : ''}，` +
-      `生成 ${groups.length} 个分组、${rules.length} 条规则`,
+      `生成 ${groups.length} 个分组、${rules.length} 条规则（布局 ${GROUP_LAYOUT}，Tailscale ${TAILSCALE_MODE}）`,
   );
 
   return {
