@@ -8,21 +8,33 @@
  *         main(config) 返回的对象会替换订阅配置（不改写订阅文件本身）。
  *
  * 做什么：
- *   1. 剔除纯广告、官网、群组等无用节点；
- *   2. 自动提取「剩余套餐/可用流量」与「到期时间」，合并为单个中文状态节点置顶显示在「节点选择」前排，
- *      不参与自动测速与故障转移，避免测速污染；
- *   3. 真实节点按地区归类聚集并连续编号（如 `🇭🇰 香港 01`、`🇯🇵 日本 01`），无冗余协议后缀；
- *   4. 重建分组：入口 / 自动 / 故障转移 / 直连 / 地区（自动+手动）/ 服务 / 广告拦截；
+ *   1. 不动节点：订阅里的节点名称、顺序、字段原样保留，只做归类（伪节点不进分组，但仍留在 proxies 里）；
+ *   2. 按名称识别地区，聚合成地区自动组（`香港-自动` / `日本-自动` …）与地区手动组，节点名本身不篡改；
+ *   3. 重建分组：入口 / 自动（默认自动测速，可手动覆盖）/ 故障转移 / 直连 / 地区（自动+手动）/ 服务 / 广告拦截；
  *      分组规模由 GROUP_LAYOUT 控制（默认 compact：合并同类服务、去掉重复地区手动组与故障转移/拒绝组），
  *      每个分组附带 icon（FlClash 列表视图显示）；
+ *      服务组与自动组都会挂上 provider 引用，因此仅 provider 订阅下也能在任意组内手动选节点；
  *      原本英文的 DIRECT 与 REJECT 统一映射为中文「直连」与「拒绝」策略组，界面告别冷冰冰的英文；
- *   5. 重建规则：按服务分组 + 广告拦截 + 国内直连，命中顺序显式且无重复；
+ *   4. 重建规则：所有判定来自 Loyalsoldier/clash-rules，手写规则只做补丁，命中顺序显式且无重复。
+ *      路由模式由 ROUTING_MODE 控制，前七段两种模式共用：
+ *      Tailscale → 本机/内网 → 补充直连（EXTRA_DIRECT_RULES）→ 服务放行（service.priority）
+ *      → 统计上报残留 → 拒绝集（Reject）→ 服务规则/服务分类集；
+ *      proxy-if-matched（默认，命中规则的才走代理，省代理流量）：后半段是
+ *      补充代理（EXTRA_PROXY_RULES）→ 墙站表（GFW / GreatFire / 非中国 TLD / ProxyList）
+ *      → 兜底直连；
+ *      direct-if-matched（命中直连规则的才直连）：后半段换成
+ *      私有域名（Private）/ 直连域名（Direct）/ 局域网段（LanCIDR）/ 国内 IP 段（CNCIDR）
+ *      → .cn → GEOIP,CN → 兜底走代理。
+ *      服务放行必须排在拒绝集之前：reject.txt 会把 Google 的 -pa 端点一起收走，
+ *      典型症状是 ogads-pa.clients6.google.com 被判广告后 Gemini 直接不可用；
+ *      服务规则（手写）排在服务分类集之前，谁更精确谁先命中；
+ *      上游也没收录的站由 EXTRA_DIRECT_RULES（该直连）/ EXTRA_PROXY_RULES（该代理）显式兜住；
  *      Tailscale 支持两种接入方式（脚本顶部 TAILSCALE_MODE）：
  *      `direct` 本机已装官方客户端，网段与 ts.net 强制直连、MagicDNS 走 100.100.100.100；
  *      `outbound` 未装官方客户端（Android），注入 type: tailscale 出站节点，仅能主动访问 tailnet；
- *   6. 重建 DNS：默认国内 DoH，境外域名按服务走对应出口解析，
+ *   5. 重建 DNS：默认国内 DoH，境外域名按服务走对应出口解析，
  *      避免原订阅「nameserver 指向代理组」造成的启动死锁；
- *   7. 订阅只有 proxy-providers（没有内联 proxies）时同样可用：
+ *   6. 订阅只有 proxy-providers（没有内联 proxies）时同样可用：
  *      分组改为 `use` 引用 provider，地区维度自动跳过。
  * 注意：本脚本整体替换 proxy-groups / rules / dns，原订阅里的自定义分组与规则
  *       会一并丢弃（它们引用的是旧组名，保留会导致 mihomo 拒绝加载）。
@@ -41,6 +53,7 @@ const FOREIGN_DNS = ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query'];
 const GROUP = {
   entry: '节点选择',
   auto: '自动选择',
+  autoTest: '自动测速',
   fallback: '故障转移',
   direct: '直连',
   reject: '拒绝',
@@ -55,6 +68,7 @@ const ICON_BASE = 'https://cdn.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color
 const ICON = {
   entry: `${ICON_BASE}/Proxy.png`,
   auto: `${ICON_BASE}/Auto.png`,
+  autoTest: `${ICON_BASE}/Speedtest.png`,
   fallback: `${ICON_BASE}/Round_Robin.png`,
   direct: `${ICON_BASE}/Direct.png`,
   reject: `${ICON_BASE}/Reject.png`,
@@ -161,6 +175,18 @@ const AI_RULES = [
   'DOMAIN-SUFFIX,suno.com',
   'DOMAIN-SUFFIX,runwayml.com',
 ];
+
+// 广告库误伤放行：这类端点被拒绝集判成广告后，整条业务链路直接断。
+// ogads-pa.clients6.google.com 在 Loyalsoldier reject.txt 里（同上一个源），
+// 命中即 REJECT，表现为 Gemini 会话 / 图片接口 403、页面一直转圈。
+// 规则必须排在 RULE-SET,Reject 之前（由 service.priority 保证）。
+const AI_ALLOW_RULES = [
+  'DOMAIN,ogads-pa.clients6.google.com',
+  'DOMAIN,ogads-pa.googleapis.com',
+];
+
+// 服务放行规则：命中即归属该服务组，且早于拒绝集与直连兜底。
+const AI_PRIORITY_RULES = [...AI_ALLOW_RULES];
 
 const COPILOT_RULES = [
   'DOMAIN,gateway.bingviz.microsoft.net',
@@ -298,6 +324,21 @@ const DEV_RULES = [
 // 'full'    完整：每个服务独立成组，保留地区手动组、故障转移与拒绝组
 const GROUP_LAYOUT = 'compact';
 
+// ─────────────────────────── 路由模式 ───────────────────────────
+// 'proxy-if-matched' 命中规则的才走代理，其余直连（默认）。
+//             匹配链：EXTRA_PROXY_RULES → GFW(4481) → GreatFire(12) → TldNotCN(829) → ProxyList(27288)
+//             → 末条 MATCH 直连；服务表与拒绝集在更前面照常命中。
+//             优点：只有列表里的站花代理流量，AWS / Cloudflare 前置的中转站、API 网关这类
+//             「海外但能直连」的站不需要逐条补；缺点：上游墙站表漏掉的被墙站会直连失败，
+//             只能补进 EXTRA_PROXY_RULES。
+// 'direct-if-matched' 命中直连规则的才直连，其余走代理。
+//             匹配链：Private → Direct → LanCIDR → CNCIDR → .cn → GEOIP,CN → 末条 MATCH 代理。
+//             优点是被墙的站一个不漏；缺点是没有域名规则命中的境外可直连站点也会进代理。
+// 旧值兼容：'whitelist' = 'proxy-if-matched'，'geo' = 'direct-if-matched'。
+const ROUTING_MODE = 'proxy-if-matched';
+const ROUTE_MODE = { geo: 'direct-if-matched', whitelist: 'proxy-if-matched' }[ROUTING_MODE] ?? ROUTING_MODE;
+const PROXY_IF_MATCHED = ROUTE_MODE !== 'direct-if-matched';
+
 // ─────────────────────────── Tailscale 接入方式 ───────────────────────────
 // 'direct'   本机已装官方 Tailscale（Windows / 桌面）。tailnet 流量强制直连，
 //            MagicDNS 交给 100.100.100.100，其他设备可反向连入本机。
@@ -339,8 +380,10 @@ const DIRECT_RULES = [
   'DOMAIN-SUFFIX,msftconnecttest.com',
   'DOMAIN-SUFFIX,msftncsi.com',
   'DOMAIN-SUFFIX,npmmirror.com',
-  'DOMAIN-SUFFIX,google-analytics.com',
-  'DOMAIN-SUFFIX,googletagmanager.com',
+  // Google 统计（GA/GTM）在国内有可达端点：211.95.34.129 / .137，直连分别返回 204 / 200。
+  // 这里只放精确域名；region1 之类的区域上报端点走广告拦截，见 buildRules 的 ANALYTICS 段。
+  'DOMAIN,www.google-analytics.com',
+  'DOMAIN,www.googletagmanager.com',
   'DOMAIN,cn.bing.com',
   'IP-CIDR,10.0.0.0/8,no-resolve',
   'IP-CIDR,127.0.0.0/8,no-resolve',
@@ -351,6 +394,29 @@ const DIRECT_RULES = [
   'IP-CIDR6,::1/128,no-resolve',
   'IP-CIDR6,fc00::/7,no-resolve',
   'IP-CIDR6,fe80::/10,no-resolve',
+];
+
+// ── 补充直连 ──
+// 规则库漏判的站，命中即直连，排在广告拦截之前。
+// 为什么需要：GEOIP,CN 只能判「解析出来的 IP 在国内」，对 Cloudflare / 海外 CDN 前置的
+// 国内站点完全无效（解析到 104.21.x / 172.67.x），这些域名只能靠域名规则命中。
+// 维护方式：发现某个国内站点被送进了代理，就把域名加在这里，一条一行。
+const EXTRA_DIRECT_RULES = [
+  'DOMAIN-SUFFIX,jiji.cc', // 吉吉API（AI 中转站），Cloudflare 前置，国内可直连
+  // DeepSeek：chat/api/www/platform 在国内解析出 116.205.40.x / 61.241.148.62（华为云），直连可用。
+  // 注意 hif-dliq.deepseek.com 是例外——它 CNAME 到华为云 WAF，全网只有 AAAA，
+  // dns.ipv6 关闭时任何出口都拿不到地址；要让这类功能可用只能开 dns.ipv6，见 readme。
+  'DOMAIN-SUFFIX,deepseek.com',
+  // 稳定AI 中转（3.25.52.22，AWS 新加坡，直连 443 可达、/v1/models 返回 401 即服务在线）。
+  // 这类海外可直连的中转站 GEOIP,CN 永远判不出来，只能按域名放行。
+  'DOMAIN-SUFFIX,wendingai.future1.us',
+];
+
+// 补充代理（仅 ROUTING_MODE = 'proxy-if-matched' 时生效）：
+// 该模式兜底直连，GFW / GreatFire / TldNotCN / ProxyList 没收录的被墙站点会直连失败，把域名加在这里兜住。
+// 一条一行、只写匹配条件，目标统一是「节点选择」；要指定某个服务组请改服务表里的 rules。
+const EXTRA_PROXY_RULES = [
+  // 示例：'DOMAIN-SUFFIX,example.com',
 ];
 
 const FAKE_IP_FILTER = [
@@ -375,20 +441,121 @@ const FAKE_IP_FILTER = [
   '+.tailscale.io',
 ];
 
+// ── Loyalsoldier/clash-rules：全部判定来源 ──
+// 同一个项目、同一套 release 产物，每日构建；条目格式是 yaml payload（`  - 'x'`），
+// 域名集用 behavior: domain，网段集用 behavior: ipcidr（cncidr / lancidr / telegramcidr）。
+const LOYAL = 'https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release';
+
 const RULE_PROVIDERS = {
-  AdBlock: {
+  // 广告：20.4 万条，替代原先的 217heidai adblock（少一个外部源，覆盖面相当）
+  Reject: {
     type: 'http',
     behavior: 'domain',
-    url: 'https://cdn.jsdelivr.net/gh/217heidai/adblockfilters@main/rules/adblockmihomo.yaml',
-    path: './rules/adblock.yaml',
+    url: `${LOYAL}/reject.txt`,
+    path: './rules/reject.yaml',
     interval: 86400,
     proxy: GROUP.entry,
   },
-  China: {
+  // 直连：11 万条域名，含国内站与国内可达的海外 CDN，是「该直连」的主判定表
+  Direct: {
     type: 'http',
     behavior: 'domain',
-    url: 'https://cdn.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Clash/China/China_Domain.yaml',
-    path: './rules/china.yaml',
+    url: `${LOYAL}/direct.txt`,
+    path: './rules/direct.yaml',
+    interval: 86400,
+    proxy: GROUP.entry,
+  },
+  // 代理：2.7 万条「通常该走代理」的域名，白名单模式的主要来源
+  ProxyList: {
+    type: 'http',
+    behavior: 'domain',
+    url: `${LOYAL}/proxy.txt`,
+    path: './rules/proxy.yaml',
+    interval: 86400,
+    proxy: GROUP.entry,
+  },
+  // 被墙：GFWList 系 + GreatFire 系，白名单模式用
+  GFW: {
+    type: 'http',
+    behavior: 'domain',
+    url: `${LOYAL}/gfw.txt`,
+    path: './rules/gfw.yaml',
+    interval: 86400,
+    proxy: GROUP.entry,
+  },
+  GreatFire: {
+    type: 'http',
+    behavior: 'domain',
+    url: `${LOYAL}/greatfire.txt`,
+    path: './rules/greatfire.yaml',
+    interval: 86400,
+    proxy: GROUP.entry,
+  },
+  // 非中国 TLD（.gov / .mil 之类，829 条），白名单模式兜住直连必挂的站
+  TldNotCN: {
+    type: 'http',
+    behavior: 'domain',
+    url: `${LOYAL}/tld-not-cn.txt`,
+    path: './rules/tld-not-cn.yaml',
+    interval: 86400,
+    proxy: GROUP.entry,
+  },
+  // 私有域名（路由器、NAS 管理页）与局域网段
+  Private: {
+    type: 'http',
+    behavior: 'domain',
+    url: `${LOYAL}/private.txt`,
+    path: './rules/private.yaml',
+    interval: 86400,
+    proxy: GROUP.entry,
+  },
+  LanCIDR: {
+    type: 'http',
+    behavior: 'ipcidr',
+    url: `${LOYAL}/lancidr.txt`,
+    path: './rules/lancidr.yaml',
+    interval: 86400,
+    proxy: GROUP.entry,
+  },
+  // 国内 IP 段（9665 条），比内置 MaxMind GEOIP 库更贴近实际归属
+  CNCIDR: {
+    type: 'http',
+    behavior: 'ipcidr',
+    url: `${LOYAL}/cncidr.txt`,
+    path: './rules/cncidr.yaml',
+    interval: 86400,
+    proxy: GROUP.entry,
+  },
+  // 服务分类：挂到对应服务组，作为手写规则之后的补充覆盖
+  Google: {
+    type: 'http',
+    behavior: 'domain',
+    url: `${LOYAL}/google.txt`,
+    path: './rules/google.yaml',
+    interval: 86400,
+    proxy: GROUP.entry,
+  },
+  Apple: {
+    type: 'http',
+    behavior: 'domain',
+    url: `${LOYAL}/apple.txt`,
+    path: './rules/apple.yaml',
+    interval: 86400,
+    proxy: GROUP.entry,
+  },
+  ICloud: {
+    type: 'http',
+    behavior: 'domain',
+    url: `${LOYAL}/icloud.txt`,
+    path: './rules/icloud.yaml',
+    interval: 86400,
+    proxy: GROUP.entry,
+  },
+  Telegram: {
+    type: 'http',
+    behavior: 'ipcidr',
+    url: `${LOYAL}/telegramcidr.txt`,
+    path: './rules/telegramcidr.yaml',
     interval: 86400,
     proxy: GROUP.entry,
   },
@@ -398,6 +565,8 @@ const RULE_PROVIDERS = {
 // 新增/删除服务只改这一张表：
 //   name          服务组名，同时也是规则命中目标
 //   rules         该服务的分流规则（写到 rules 里的原始行，目标组自动补）
+//   sets          额外引用的规则集（键名见 RULE_PROVIDERS），目标同样自动补成本服务组
+//   priority      必须在广告拦截之前命中的规则（放行被误杀的端点、抢在别家规则前分类）
 //   preferRegions 优先排在前面的地区自动组（如 'JP' → 日本-自动）
 //   directFirst   直连优先（国内可用服务），DNS 不切境外
 //   allowDirect   组内末尾附带 DIRECT 作为兜底
@@ -412,7 +581,13 @@ const SERVICES = [
     dnsVia: 'self',
     icon: ICON.ai,
   },
-  { name: 'AI', rules: [...OPENCODE_RULES, ...AI_RULES], dnsVia: 'self', icon: ICON.ai },
+  {
+    name: 'AI',
+    rules: [...OPENCODE_RULES, ...AI_RULES],
+    priority: AI_PRIORITY_RULES,
+    dnsVia: 'self',
+    icon: ICON.ai,
+  },
   {
     name: 'Copilot',
     rules: COPILOT_RULES,
@@ -421,12 +596,12 @@ const SERVICES = [
     icon: ICON.copilot,
   },
   { name: 'YouTube', rules: YOUTUBE_RULES, allowDirect: true, icon: ICON.youtube },
-  { name: 'Google', rules: GOOGLE_RULES, allowDirect: true, icon: ICON.google },
-  { name: 'Telegram', rules: TELEGRAM_RULES, allowDirect: true, icon: ICON.telegram },
+  { name: 'Google', rules: GOOGLE_RULES, sets: ['Google'], allowDirect: true, icon: ICON.google },
+  { name: 'Telegram', rules: TELEGRAM_RULES, sets: ['Telegram'], allowDirect: true, icon: ICON.telegram },
   { name: '社交', rules: SOCIAL_RULES, allowDirect: true, icon: ICON.social },
   { name: '流媒体', rules: MEDIA_RULES, allowDirect: true, icon: ICON.streaming },
   { name: '微软', rules: MICROSOFT_RULES, directFirst: true, icon: ICON.system },
-  { name: '苹果', rules: APPLE_RULES, directFirst: true, icon: ICON.apple },
+  { name: '苹果', rules: APPLE_RULES, sets: ['ICloud', 'Apple'], directFirst: true, icon: ICON.apple },
   { name: '开发者', rules: DEV_RULES, allowDirect: true, icon: ICON.developer },
 ];
 
@@ -435,6 +610,7 @@ const COMPACT_SERVICES = [
   {
     name: 'AI',
     rules: [...OPENCODE_RULES, ...CLAUDE_RULES, ...AI_RULES, ...COPILOT_RULES],
+    priority: AI_PRIORITY_RULES,
     preferRegions: ['JP', 'US'],
     allowDirect: true,
     dnsVia: 'self',
@@ -444,11 +620,24 @@ const COMPACT_SERVICES = [
   {
     name: '媒体',
     rules: [...YOUTUBE_RULES, ...GOOGLE_RULES, ...MEDIA_RULES],
+    sets: ['Google'],
     allowDirect: true,
     icon: ICON.media,
   },
-  { name: '社交', rules: [...TELEGRAM_RULES, ...SOCIAL_RULES], allowDirect: true, icon: ICON.social },
-  { name: '系统', rules: [...MICROSOFT_RULES, ...APPLE_RULES], directFirst: true, icon: ICON.system },
+  {
+    name: '社交',
+    rules: [...TELEGRAM_RULES, ...SOCIAL_RULES],
+    sets: ['Telegram'],
+    allowDirect: true,
+    icon: ICON.social,
+  },
+  {
+    name: '系统',
+    rules: [...MICROSOFT_RULES, ...APPLE_RULES],
+    sets: ['ICloud', 'Apple'],
+    directFirst: true,
+    icon: ICON.system,
+  },
   { name: '开发者', rules: DEV_RULES, allowDirect: true, icon: ICON.developer },
 ];
 
@@ -487,22 +676,6 @@ function withTarget(line, target) {
   return `${line},${target}`;
 }
 
-function extractTraffic(raw) {
-  const m =
-    raw.match(/(?:剩余流量|可用流量|剩余套餐|剩余)[：:\s]*([0-9.]+\s*[KMGT]?B?)/i) ||
-    raw.match(/([0-9.]+\s*[KMGT]B?)\s*(?:剩余|可用)/i) ||
-    raw.match(/(?:总流量|套餐流量|流量)[：:\s]*([0-9.]+\s*[KMGT]?B?)/i);
-  return m ? m[1].trim() : null;
-}
-
-function extractExpire(raw) {
-  const m =
-    raw.match(/(?:到期时间|套餐到期|过期时间|到期)[：:\s]*([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2})/i) ||
-    raw.match(/([0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2})\s*(?:到期|过期)/i) ||
-    raw.match(/(?:距离(?:下次)?重置(?:还有)?|重置[日时间]*)[：:\s]*([0-9]+\s*天|每月\s*[0-9]+\s*[号日])/i);
-  return m ? m[1].trim() : null;
-}
-
 function uniq(items) {
   return [...new Set(items)];
 }
@@ -514,97 +687,48 @@ function uniqueName(base, taken) {
   return name;
 }
 
-// ─────────────────────────── 节点整理 ───────────────────────────
+// ─────────────────────────── 节点归类 ───────────────────────────
 
 /**
- * 过滤伪节点并按地区连续编号重命名（同一地区节点聚合在一起）。
+ * 只归类，不动节点：订阅里的节点名称、顺序、字段原样保留。
+ * 这里算出来的 regionMembers 决定「地区组引用哪些名字」，hiddenNames 是那些
+ * 不该进任何分组的伪节点（官网、群组公告、流量/到期信息节点）。
  */
-function normalizeProxies(rawProxies) {
+function classifyProxies(rawProxies) {
   const regionBuckets = new Map();
   for (const region of [...REGIONS, OTHER_REGION]) {
     regionBuckets.set(region.key, []);
   }
 
-  let trafficInfo = null;
-  let expireInfo = null;
-  let sampleDummyProxy = null;
+  const hiddenNames = new Set();
 
-  // 1. 过滤垃圾/官网，提取套餐流量与到期时间，其余按地区分桶
   for (const proxy of rawProxies) {
-    const raw = typeof proxy?.name === 'string' ? proxy.name : '';
-    if (!raw) continue;
+    const name = typeof proxy?.name === 'string' ? proxy.name : '';
+    if (!name) continue;
 
-    // 彻底剔除官网、群组等纯推广广告
-    if (JUNK_NODE.test(raw)) continue;
-
-    // 提取套餐/到期时间信息（已格式化节点支持幂等重解析）
-    if (INFO_NODE.test(raw) || /^📊|📅/.test(raw)) {
-      const t = extractTraffic(raw);
-      if (t && !trafficInfo) trafficInfo = t;
-      const e = extractExpire(raw);
-      if (e && !expireInfo) expireInfo = e;
-      if (!sampleDummyProxy) sampleDummyProxy = proxy;
+    // 官网、群组、公告、流量/到期信息节点：留在 proxies 里，只是不参与分组与测速
+    if (JUNK_NODE.test(name) || INFO_NODE.test(name) || /^📊|📅/.test(name)) {
+      hiddenNames.add(name);
       continue;
     }
 
-    const region = regionOf(raw);
-    regionBuckets.get(region.key).push({ proxy, raw, region });
+    regionBuckets.get(regionOf(name).key).push(name);
   }
 
-  // 2. 按地区顺序归类聚拢，同一地区连续编号（如 🇭🇰 香港 01、🇭🇰 香港 02）
-  const proxies = [];
-  const renamed = new Map();
   const regionMembers = new Map();
-
   for (const region of [...REGIONS, OTHER_REGION]) {
-    const bucket = regionBuckets.get(region.key) ?? [];
-    if (bucket.length === 0) continue;
-
-    const names = [];
-    bucket.forEach((item, index) => {
-      const num = String(index + 1).padStart(2, '0');
-      const name = `${region.flag} ${region.name} ${num}`;
-      names.push(name);
-      renamed.set(item.raw, name);
-      proxies.push({ ...item.proxy, name });
-    });
-
-    regionMembers.set(region.name, names);
+    const members = regionBuckets.get(region.key) ?? [];
+    if (members.length > 0) regionMembers.set(region.name, uniq(members));
   }
 
-  // 3. 将提取的套餐与到期时间合并为单个中文状态节点，置于节点列表首位
-  let infoNode = null;
-  if (trafficInfo || expireInfo) {
-    let title = '';
-    if (trafficInfo && expireInfo) {
-      title = `📊 剩余: ${trafficInfo} | 到期: ${expireInfo}`;
-    } else if (trafficInfo) {
-      title = `📊 剩余: ${trafficInfo}`;
-    } else {
-      title = `📅 到期: ${expireInfo}`;
-    }
-
-    infoNode = {
-      ...(sampleDummyProxy ?? {
-        type: 'ss',
-        server: '127.0.0.1',
-        port: 1080,
-        cipher: 'aes-128-gcm',
-        password: 'dummy',
-      }),
-      name: title,
-    };
-    proxies.unshift(infoNode);
-  }
-
-  return { proxies, renamed, regionMembers, infoNode };
+  return { regionMembers, hiddenNames };
 }
 
 
 // ─────────────────────────── 分组构建 ───────────────────────────
 
 function buildGroups(ctx) {
-  const { nodeNames, providerKeys, regionMembers, infoNodeName } = ctx;
+  const { nodeNames, providerKeys, regionMembers } = ctx;
   // 订阅只给 provider 时无法枚举节点，地区维度直接跳过
   const enumrable = nodeNames.length > 0;
   const compact = isCompact();
@@ -637,10 +761,9 @@ function buildGroups(ctx) {
   const regionNames = regionManual.map((group) => group.name);
   const regionAutoNames = regionAuto.map((group) => group.name);
 
-  // 节点出口组：内联节点直接列名字；有 provider 时用 use 引用，
-  // 并用与 JS 过滤一致的正则排除 provider 里的伪节点。
-  const nodeGroup = (name, proxies, type, extra) => {
-    const group = testGroup(name, proxies, type, extra);
+  // provider 订阅拿不到节点名，只能靠 use 引用成员；exclude-filter 与 JS 侧过滤保持一致，
+  // 避免 provider 里的公告 / 到期节点混进手动列表。
+  const attachProviders = (group) => {
     if (providerKeys.length > 0) {
       group.use = providerKeys;
       group['exclude-filter'] = NOTICE_PATTERN;
@@ -648,10 +771,20 @@ function buildGroups(ctx) {
     return group;
   };
 
-  const autoGroup = nodeGroup(GROUP.auto, nodeNames, 'url-test', {
+  // 测速类分组：内联节点直接列名字；provider 订阅由 use 提供成员。
+  const nodeGroup = (name, proxies, type, extra) =>
+    attachProviders(testGroup(name, proxies, type, extra));
+
+  // 自动测速：url-test 类型，负责在全部节点里择优。
+  const autoTestGroup = nodeGroup(GROUP.autoTest, nodeNames, 'url-test', {
     tolerance: TOLERANCE,
-    icon: ICON.auto,
+    icon: ICON.autoTest,
   });
+  // 「自动选择」做成 select：默认选中自动测速，同时允许手动选中任意节点。
+  // url-test / fallback 类型本身不可手选，所以单独拆出自动测速子组保留择优能力。
+  const autoGroup = attachProviders(
+    listGroup(GROUP.auto, uniq([GROUP.autoTest, ...nodeNames]), { icon: ICON.auto }),
+  );
   // 精简布局不建故障转移与拒绝组：自动选择已覆盖测速择优，广告拦截直接指向 REJECT
   const fallbackGroup = compact
     ? null
@@ -661,22 +794,19 @@ function buildGroups(ctx) {
   const directGroup = listGroup(GROUP.direct, ['DIRECT'], { icon: ICON.direct });
   const rejectGroup = compact ? null : listGroup(GROUP.reject, ['REJECT'], { icon: ICON.reject });
 
-  const entryGroup = listGroup(
-    GROUP.entry,
-    uniq([
-      GROUP.auto,
-      ...(infoNodeName ? [infoNodeName] : []),
-      ...(fallbackGroup ? [GROUP.fallback] : []),
-      GROUP.direct,
-      ...(compact ? regionAutoNames : regionNames),
-      ...nodeNames,
-    ]),
-    { icon: ICON.entry },
+  const entryGroup = attachProviders(
+    listGroup(
+      GROUP.entry,
+      uniq([
+        GROUP.auto,
+        ...(fallbackGroup ? [GROUP.fallback] : []),
+        GROUP.direct,
+        ...(compact ? regionAutoNames : regionNames),
+        ...nodeNames,
+      ]),
+      { icon: ICON.entry },
+    ),
   );
-  if (providerKeys.length > 0) {
-    entryGroup.use = providerKeys;
-    entryGroup['exclude-filter'] = NOTICE_PATTERN;
-  }
 
   // 服务组：默认自动择优，可手动覆盖
   const serviceGroup = (service) => {
@@ -693,7 +823,9 @@ function buildGroups(ctx) {
       ...nodeNames,
       ...(service.allowDirect || service.directFirst ? [GROUP.direct] : []),
     ]);
-    return listGroup(service.name, proxies, { icon: service.icon });
+    // 服务组同样是 select：除了自动 / 地区 / 内联节点，再挂 provider 引用，
+    // 保证只有 proxy-providers 的订阅也能在这里手动选中具体节点。
+    return attachProviders(listGroup(service.name, proxies, { icon: service.icon }));
   };
 
   const services = activeServices();
@@ -709,6 +841,7 @@ function buildGroups(ctx) {
   const groups = [
     entryGroup,
     autoGroup,
+    autoTestGroup,
     fallbackGroup,
     directGroup,
     ...regionAuto,
@@ -730,21 +863,68 @@ function buildGroups(ctx) {
 
 function buildRules() {
   const tailscaleTarget = isTailscaleOutbound() ? TAILSCALE_NODE.group : GROUP.direct;
+  const services = activeServices();
+
+  // 服务放行：service.priority 里的规则排在广告拦截之前，避免被广告库误判成 REJECT
+  const allowRules = services.flatMap((service) =>
+    (service.priority ?? []).map((rule) => withTarget(rule, service.name)),
+  );
+
+  // 统计上报的区域端点（如 region1.google-analytics.com → 216.239.32/34.36）国内直连必超时，
+  // 挂到直连只会让页面里的 GA4 请求卡到超时。送到广告拦截组（默认 REJECT）立即断开，页面无感。
+  // 可达的精确域名已在 DIRECT_RULES 里放行，不会被这条 suffix 覆盖。
+  const analyticsRules = [
+    'DOMAIN-SUFFIX,google-analytics.com',
+    'DOMAIN-SUFFIX,googletagmanager.com',
+  ].map((rule) => withTarget(rule, GROUP.adblock));
+
+  // 服务分流：手写规则在前（更精确），服务分类规则集在后（更宽覆盖）
+  const serviceRules = services.flatMap((service) => [
+    ...(service.rules ?? []).map((rule) => withTarget(rule, service.name)),
+    ...(service.sets ?? []).map((set) => `RULE-SET,${set},${service.name}`),
+  ]);
+
   const lines = [
+    // 1. Tailscale 网段 / 控制面 / MagicDNS
     ...TAILSCALE_RULES.map((rule) => withTarget(rule, tailscaleTarget)),
+    // 2. 本机与内网
     ...DIRECT_RULES.map((rule) => withTarget(rule, GROUP.direct)),
-    `RULE-SET,AdBlock,${GROUP.adblock}`,
-    ...activeServices().flatMap((service) =>
-      (service.rules ?? []).map((rule) => withTarget(rule, service.name)),
-    ),
-    `RULE-SET,China,${GROUP.direct}`,
-    `DOMAIN-SUFFIX,cn,${GROUP.direct}`,
-    `GEOIP,CN,${GROUP.direct}`,
-    `MATCH,${GROUP.entry}`,
+    // 3. 规则库漏判的国内站点（CDN 前置，GEOIP 判不出）
+    ...EXTRA_DIRECT_RULES.map((rule) => withTarget(rule, GROUP.direct)),
+    // 4. 服务放行：必须早于拒绝集
+    ...allowRules,
+    // 5. 统计上报的残留子域：立即断开，别再落到直连或代理
+    ...analyticsRules,
+    // 6. 广告：Loyalsoldier reject.txt
+    `RULE-SET,Reject,${GROUP.adblock}`,
+    // 7. 服务分流
+    ...serviceRules,
   ];
 
+  // 8. 兜底：两种模式只在这里分叉
+  const tail = PROXY_IF_MATCHED
+    ? [
+        // proxy-if-matched：先送走自己补的站与上游墙站表，其余一律直连
+        ...EXTRA_PROXY_RULES.map((rule) => withTarget(rule, GROUP.entry)),
+        `RULE-SET,GFW,${GROUP.entry}`,
+        `RULE-SET,GreatFire,${GROUP.entry}`,
+        `RULE-SET,TldNotCN,${GROUP.entry}`,
+        `RULE-SET,ProxyList,${GROUP.entry}`,
+        `MATCH,${GROUP.direct}`,
+      ]
+    : [
+        // direct-if-matched：私有 / 直连域名 → 局域网段 → 国内 IP 段 → .cn → GEOIP → 其余走代理
+        `RULE-SET,Private,${GROUP.direct}`,
+        `RULE-SET,Direct,${GROUP.direct}`,
+        `RULE-SET,LanCIDR,${GROUP.direct}`,
+        `RULE-SET,CNCIDR,${GROUP.direct}`,
+        `DOMAIN-SUFFIX,cn,${GROUP.direct}`,
+        `GEOIP,CN,${GROUP.direct}`,
+        `MATCH,${GROUP.entry}`,
+      ];
+
   // 去重（同一行只保留首次出现，保持命中顺序）
-  return uniq(lines);
+  return uniq([...lines, ...tail]);
 }
 
 // ─────────────────────────── DNS 构建 ───────────────────────────
@@ -759,7 +939,8 @@ function buildDns(validNames) {
     const target = service.dnsVia === 'self' ? service.name : OVERSEAS_DNS_GROUP;
     if (!validNames.has(target)) continue;
 
-    for (const rule of service.rules ?? []) {
+    // priority 里的域名同样按服务出口解析（如 ogads 走 AI 组，避免国内 DoH 解析出被墙地址）
+    for (const rule of [...(service.priority ?? []), ...(service.rules ?? [])]) {
       const [type, value] = rule.split(',');
       if (!value) continue;
       if (type === 'DOMAIN') {
@@ -804,24 +985,25 @@ function main(config) {
     return config;
   }
 
-  // 1. 过滤伪节点 + 提取合并状态节点 + 重命名
-  const { proxies, renamed, regionMembers, infoNode } = normalizeProxies(rawProxies);
-  if (rawProxies.length > 0 && proxies.length === 0) {
-    console.warn('过滤后没有可用节点，保留原始配置');
+  // 1. 按地区归类：节点本身原样保留（名称、顺序、字段都不改）
+  const { regionMembers, hiddenNames } = classifyProxies(rawProxies);
+  const proxies = rawProxies.slice();
+
+  // 参与分组与测速的节点（排除官网、公告、流量/到期信息节点）
+  const nodeNames = proxies
+    .map((proxy) => proxy?.name)
+    .filter((name) => typeof name === 'string' && name && !hiddenNames.has(name));
+
+  if (rawProxies.length > 0 && nodeNames.length === 0 && providerKeys.length === 0) {
+    console.warn('订阅里没有可用节点，保留原始配置');
     return config;
   }
-
-  // 真实可用节点（排除仅用于展示的状态节点，避免测速污染与故障转移误切）
-  const nodeNames = proxies.filter((p) => p !== infoNode).map((proxy) => proxy.name);
 
   // Tailscale 内置出站节点：仅 outbound 模式注入，不进入自动选择、故障转移与入口组
   let tailscaleNodeName = null;
   if (isTailscaleOutbound()) {
-    // 同时避开订阅里的原始名：重命名表会把同名引用改写到订阅节点上
-    const taken = new Set([
-      ...proxies.map((proxy) => proxy.name),
-      ...rawProxies.map((proxy) => proxy?.name).filter(Boolean),
-    ]);
+    // 与订阅节点撞名会覆盖原节点，撞上就追加序号
+    const taken = new Set(proxies.map((proxy) => proxy?.name).filter(Boolean));
     tailscaleNodeName = uniqueName(TAILSCALE_NODE.name, taken);
     proxies.push({
       name: tailscaleNodeName,
@@ -838,7 +1020,7 @@ function main(config) {
   }
 
   // 2~5. 分组
-  const ctx = { nodeNames, providerKeys, regionMembers, infoNodeName: infoNode?.name };
+  const ctx = { nodeNames, providerKeys, regionMembers };
   const { groups } = buildGroups(ctx);
 
   // Tailscale 策略组紧跟入口组：默认走内置节点，可手动切回直连逃生
@@ -873,15 +1055,11 @@ function main(config) {
     }
   }
   for (const group of groups) {
-    const dropped = (group.proxies ?? []).filter((name) => !valid.has(name) && !renamed.has(name));
+    const dropped = (group.proxies ?? []).filter((name) => !valid.has(name));
     if (dropped.length > 0) {
       console.warn(`${group.name} 丢弃未知引用：${dropped.join(', ')}`);
     }
-    const kept = uniq(
-      (group.proxies ?? [])
-        .map((name) => renamed.get(name) ?? name)
-        .filter((name) => valid.has(name)),
-    );
+    const kept = uniq((group.proxies ?? []).filter((name) => valid.has(name)));
 
     if (kept.length > 0) {
       group.proxies = kept;
@@ -897,9 +1075,20 @@ function main(config) {
   // 8. DNS
   const dns = buildDns(valid);
 
+  // 只下发实际被引用的规则集：proxy-if-matched 不会去下 11 万条的 direct，direct-if-matched 也不会去下 2.7 万条的 proxy
+  const usedSets = new Set(
+    validatedRules
+      .filter((rule) => rule.startsWith('RULE-SET,'))
+      .map((rule) => rule.split(',')[1]),
+  );
+  const ruleProviders = Object.fromEntries(
+    Object.entries(RULE_PROVIDERS).filter(([key]) => usedSets.has(key)),
+  );
+
   console.log(
     `保留 ${nodeNames.length} 个节点${providerKeys.length ? `、引用 ${providerKeys.length} 个 provider` : ''}，` +
-      `生成 ${groups.length} 个分组、${rules.length} 条规则（布局 ${GROUP_LAYOUT}，Tailscale ${TAILSCALE_MODE}）`,
+      `生成 ${groups.length} 个分组、${rules.length} 条规则、${Object.keys(ruleProviders).length} 个规则集` +
+      `（布局 ${GROUP_LAYOUT}，路由 ${ROUTE_MODE}，Tailscale ${TAILSCALE_MODE}）`,
   );
 
   return {
@@ -907,7 +1096,7 @@ function main(config) {
     proxies,
     'proxy-groups': groups,
     rules: validatedRules,
-    'rule-providers': { ...(config['rule-providers'] ?? {}), ...RULE_PROVIDERS },
+    'rule-providers': { ...(config['rule-providers'] ?? {}), ...ruleProviders },
     dns,
     'store-selected': true,
     'store-fake-ip': true,
